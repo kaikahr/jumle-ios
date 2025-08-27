@@ -1,0 +1,56 @@
+//
+//  AppLanguage.swift
+//  jumle
+//
+//  Created by Kai Kahar on 2025-08-07.
+//
+// File: Models/AppLanguage.swift
+import Foundation
+
+enum AppLanguage: String, CaseIterable, Codable, Identifiable {
+    case English, French, German, Turkish, Ukrainian, Japanese, Italian, Russian
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .English:   return "English"
+        case .French:    return "French"
+        case .German:    return "German"
+        case .Turkish:   return "Turkish"
+        case .Ukrainian: return "Ukrainian"
+        case .Japanese:  return "Japanese"
+        case .Italian:   return "Italian"
+        case .Russian:   return "Russian"
+        }
+    }
+    
+}
+extension AppLanguage {
+    var audioFolder: String {
+        switch self {
+        case .English:   return "audio_en"
+        case .French:    return "audio_fr"
+        case .German:    return "audio_de"
+        case .Turkish:   return "audio_tr"
+        case .Ukrainian: return "audio_uk"
+        case .Japanese:  return "audio_jp"   // as per your note
+        case .Italian:   return "audio_it"
+        case .Russian:   return "audio_ru"
+        }
+    }
+
+    /// File name prefix before "-<id>.mp3"
+    var audioPrefix: String {
+        switch self {
+        case .English:   return "English"
+        case .French:    return "French"
+        case .German:    return "German"
+        case .Turkish:   return "Turkish"
+        case .Ukrainian: return "Ukrainian"
+        case .Japanese:  return "Japanese"
+        case .Italian:   return "Italian"
+        case .Russian:   return "Russian"
+        }
+    }
+}
