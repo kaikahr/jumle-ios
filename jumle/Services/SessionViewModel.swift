@@ -20,6 +20,10 @@ final class SessionViewModel: ObservableObject {
     @Published var currentUser: AppUser?
     @Published var isSignedIn: Bool = false
     @Published var showSignInSheet: Bool = false
+    
+    // Email/Password specific states
+    @Published var isLoading: Bool = false
+    @Published var authError: String?
 
     private let db = Firestore.firestore()
     private var authStateHandle: AuthStateDidChangeListenerHandle?
@@ -89,13 +93,114 @@ final class SessionViewModel: ObservableObject {
         await loadUserModel(user)
     }
 
-    // MARK: - Google Sign-In
+    // MARK: - Email/Password Authentication
+    func signUpWithEmail(email: String, password: String, displayName: String? = nil) async throws {
+        guard !email.isEmpty, !password.isEmpty else {
+            throw AuthError.invalidCredentials
+        }
+        
+        guard password.count >= 6 else {
+            throw AuthError.weakPassword
+        }
+        
+        isLoading = true
+        authError = nil
+        
+        do {
+            let authResult = try await Auth.auth().createUser(withEmail: email, password: password)
+            
+            // Update display name if provided
+            if let name = displayName, !name.isEmpty {
+                let changeRequest = authResult.user.createProfileChangeRequest()
+                changeRequest.displayName = name
+                try await changeRequest.commitChanges()
+            }
+            
+            try await upsertUser(authResult.user, provider: "email")
+            await refreshUser(authResult.user)
+            showSignInSheet = false
+            
+        } catch let error as NSError {
+            authError = mapAuthError(error)
+            throw AuthError.signUpFailed(authError ?? "Unknown error")
+        }
+        
+        isLoading = false
+    }
+    
+    func signInWithEmail(email: String, password: String) async throws {
+        guard !email.isEmpty, !password.isEmpty else {
+            throw AuthError.invalidCredentials
+        }
+        
+        isLoading = true
+        authError = nil
+        
+        do {
+            let authResult = try await Auth.auth().signIn(withEmail: email, password: password)
+            try await upsertUser(authResult.user, provider: "email")
+            await refreshUser(authResult.user)
+            showSignInSheet = false
+            
+        } catch let error as NSError {
+            authError = mapAuthError(error)
+            throw AuthError.signInFailed(authError ?? "Unknown error")
+        }
+        
+        isLoading = false
+    }
+    
+    func resetPassword(email: String) async throws {
+        guard !email.isEmpty else {
+            throw AuthError.invalidEmail
+        }
+        
+        isLoading = true
+        authError = nil
+        
+        do {
+            try await Auth.auth().sendPasswordReset(withEmail: email)
+        } catch let error as NSError {
+            authError = mapAuthError(error)
+            throw AuthError.resetPasswordFailed(authError ?? "Unknown error")
+        }
+        
+        isLoading = false
+    }
+    
+    private func mapAuthError(_ error: NSError) -> String {
+        guard let errorCode = AuthErrorCode(rawValue: error.code) else {
+            return error.localizedDescription
+        }
+        
+        switch errorCode {
+        case .emailAlreadyInUse:
+            return "This email address is already registered."
+        case .invalidEmail:
+            return "Please enter a valid email address."
+        case .weakPassword:
+            return "Password must be at least 6 characters long."
+        case .userNotFound:
+            return "No account found with this email address."
+        case .wrongPassword:
+            return "Incorrect password. Please try again."
+        case .userDisabled:
+            return "This account has been disabled."
+        case .tooManyRequests:
+            return "Too many attempts. Please try again later."
+        case .networkError:
+            return "Network error. Please check your connection."
+        default:
+            return error.localizedDescription
+        }
+    }
+
+    // MARK: - Google Sign-In (unchanged)
     func signInWithGoogle(presenting: UIViewController) async throws {
         guard let clientID = FirebaseApp.app()?.options.clientID else {
             throw NSError(domain: "app", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing Google client ID"])
         }
 
-        // Optional with latest SDKs; safe to keep
         GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientID)
 
         let signInResult = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<GIDSignInResult, Error>) in
@@ -117,11 +222,11 @@ final class SessionViewModel: ObservableObject {
         let authResult = try await Auth.auth().signIn(with: credential)
 
         try await upsertUser(authResult.user, provider: "google")
-        await refreshUser(authResult.user)          // ✅ fixed name
+        await refreshUser(authResult.user)
         showSignInSheet = false
     }
 
-    // MARK: - Sign in with Apple
+    // MARK: - Sign in with Apple (unchanged)
     func startSignInWithApple() -> ASAuthorizationAppleIDRequest {
         let provider = ASAuthorizationAppleIDProvider()
         let request = provider.createRequest()
@@ -144,13 +249,11 @@ final class SessionViewModel: ObservableObject {
                 throw NSError(domain: "app", code: -3, userInfo: [NSLocalizedDescriptionKey: "Invalid Apple credential"])
             }
 
-            // ✅ Use AppleAuthProvider in modern FirebaseAuth
             let appleCred = OAuthProvider.appleCredential(
                 withIDToken: tokenString,
                 rawNonce: nonce,
                 fullName: credential.fullName
             )
-
 
             let authResult = try await Auth.auth().signIn(with: appleCred)
             try await upsertUser(authResult.user, provider: "apple")
@@ -180,8 +283,12 @@ final class SessionViewModel: ObservableObject {
         showSignInSheet = true
         return false
     }
+    
+    func clearError() {
+        authError = nil
+    }
 
-    // Nonce helpers
+    // Nonce helpers (unchanged)
     private func sha256(_ input: String) -> String {
         let data = Data(input.utf8)
         let hashed = SHA256.hash(data: data)
@@ -204,5 +311,32 @@ final class SessionViewModel: ObservableObject {
             }
         }
         return result
+    }
+}
+
+// MARK: - Auth Error Types
+enum AuthError: LocalizedError {
+    case invalidCredentials
+    case invalidEmail
+    case weakPassword
+    case signUpFailed(String)
+    case signInFailed(String)
+    case resetPasswordFailed(String)
+    
+    var errorDescription: String? {
+        switch self {
+        case .invalidCredentials:
+            return "Please enter both email and password."
+        case .invalidEmail:
+            return "Please enter a valid email address."
+        case .weakPassword:
+            return "Password must be at least 6 characters long."
+        case .signUpFailed(let message):
+            return "Sign up failed: \(message)"
+        case .signInFailed(let message):
+            return "Sign in failed: \(message)"
+        case .resetPasswordFailed(let message):
+            return "Password reset failed: \(message)"
+        }
     }
 }

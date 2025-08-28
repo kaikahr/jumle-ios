@@ -15,7 +15,7 @@ struct AppUser: Codable, Identifiable {
     var email: String?
     var displayName: String?
     var photoURL: String?
-    var provider: String      // "google" or "apple"
+    var provider: String      // "google", "apple", or "email"
     var createdAt: Date
     var updatedAt: Date
 
@@ -31,4 +31,22 @@ struct AppUser: Codable, Identifiable {
     }
 
     static var collection: String { "users" }
+    
+    // Convenience computed properties
+    var isEmailProvider: Bool {
+        return provider == "email"
+    }
+    
+    var providerDisplayName: String {
+        switch provider {
+        case "google":
+            return "Google"
+        case "apple":
+            return "Apple"
+        case "email":
+            return "Email"
+        default:
+            return "Unknown"
+        }
+    }
 }

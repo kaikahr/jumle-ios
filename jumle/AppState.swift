@@ -1,307 +1,369 @@
-// File: AppState.swift
+// Replace your current AppState.swift with this simplified version
+
 import SwiftUI
-import Foundation
 import Combine
 
-// MARK: - Theme Enum
-enum Theme: String, CaseIterable, Identifiable, Codable {
-    case general
-    case social
-    case routine
-    case emotions
-    case entertainment
-    case politeness
-    case food
-    case greetings
-    case health
-    case hobbies
-    case housing
-    case manifest
-    case opinions
-    case relationships
-    case safety
-    case study
-    case education
-    case money
-    case tech
-    case time
-    case travel
-    case nature
-    case work
-
+enum Theme: String, CaseIterable, Identifiable {
+    case education, emotions, entertainment, food, greetings, health, hobbies, housing
+    case money, nature, opinions, politeness, relationships, routine, safety, social
+    case study, tech, time, travel, work
+    
     var id: String { rawValue }
-    var display: String { rawValue.replacingOccurrences(of: "_", with: " ").capitalized }
-    var filename: String { "\(rawValue).json" }
+    
+    var display: String {
+        rawValue.capitalized
+    }
+}
+
+enum LoadingState {
+    case idle
+    case loading
+    case loaded
+    case error(String)
+    
+    var isLoading: Bool {
+        if case .loading = self { return true }
+        return false
+    }
 }
 
 @MainActor
 final class AppState: ObservableObject {
-    // Raw data and UI-ready filtered list
+    // MARK: - Core Data
     @Published var sentences: [Sentence] = []
-    @Published var filtered: [Sentence] = []
-
-    // UI state
-    @Published var saved: Set<Int> = []
-    @Published var isLoading: Bool = false
-    @Published var errorMessage: String? = nil
-    @Published var searchText: String = ""
-    @Published var selectedTopic: String? = nil
-
-    // Theme selection (defaults to General)
-    @Published var selectedTheme: Theme = .general
-    // ✅ New: a cross-dataset cache so Saved tab is stable no matter what is loaded
-    @Published private(set) var savedIndex: [Int: Sentence] = [:]
     @Published var globalIndex: [Int: Sentence] = [:]
-
-    // Explain/Context transient UI state (per active request)
-    @Published var aiIsWorking: Bool = false
-    @Published var aiError: String? = nil
-
-    // Persisted languages (by rawValue)
-    @AppStorage("knownLanguage") private var knownLanguageRaw: String = AppLanguage.English.rawValue
-    @AppStorage("learningLanguage") private var learningLanguageRaw: String = AppLanguage.French.rawValue
-
-    var knownLanguage: AppLanguage {
-        get { AppLanguage(rawValue: knownLanguageRaw) ?? .English }
-        set {
-            if newValue == learningLanguage,
-               let alt = AppLanguage.allCases.first(where: { $0 != newValue }) {
-                learningLanguageRaw = alt.rawValue
-            }
-            knownLanguageRaw = newValue.rawValue
-            objectWillChange.send()
+    
+    // Persistent cache of ALL sentences ever loaded (for SavedView)
+    private var persistentSentenceCache: [Int: Sentence] = [:]
+    
+    // MARK: - Selection State
+    @Published var selectedTheme: Theme?
+    @Published var selectedTopic: String?
+    @Published var selectedGrammar: String?
+    @Published var availableGrammar: [String] = GrammarCatalog.allDisplayNames
+    
+    // MARK: - Computed Properties
+    var currentSelection: String {
+        if let theme = selectedTheme {
+            return theme.rawValue
+        } else if let grammar = selectedGrammar {
+            return "grammar: \(grammar)"
+        } else {
+            return "general"
         }
     }
-
-    var learningLanguage: AppLanguage {
-        get { AppLanguage(rawValue: learningLanguageRaw) ?? .French }
-        set {
-            if newValue == knownLanguage,
-               let alt = AppLanguage.allCases.first(where: { $0 != newValue }) {
-                knownLanguageRaw = alt.rawValue
-            }
-            learningLanguageRaw = newValue.rawValue
-            objectWillChange.send()
-        }
+    
+    // MARK: - Search & Filtering
+    @Published var searchText: String = ""
+    @Published private var _filtered: [Sentence] = []
+    @Published var saved: Set<Int> = []
+    
+    // MARK: - Loading States
+    @Published var loadingState: LoadingState = .idle
+    @Published var filteringState: LoadingState = .idle
+    @Published var loadingProgress: Double = 0.0
+    
+    // MARK: - Computed Properties
+    var filtered: [Sentence] {
+        _filtered
     }
-
-    // Topics
-    let defaultTopics: [String] = [
-        "General", "Directions", "Shopping", "Health", "Greetings",
-        "Food", "Travel", "Work", "School", "Weather", "Hobbies", "Technology"
-    ]
-
+    
+    var isLoading: Bool {
+        loadingState.isLoading || filteringState.isLoading
+    }
+    
+    var errorMessage: String? {
+        if case .error(let message) = loadingState {
+            return message
+        }
+        return nil
+    }
+    
     var availableTopics: [String] {
-        let fromData = Set(sentences.compactMap { $0.theme }.filter { !$0.isEmpty })
-        return Array(fromData).sorted() + defaultTopics
+        Array(Set(sentences.compactMap { $0.topics.first }))
+            .filter { !$0.isEmpty }
+            .sorted()
     }
-
-    // MARK: - Filtering (Combine)
+    
+    // MARK: - Services
+    private let ai = OpenAIService.shared
     private var cancellables = Set<AnyCancellable>()
-
-    init() {
-        setupFiltering()
+    private var filteringTask: Task<Void, Never>?
+    
+    // MARK: - AI State
+    @Published var aiError: String?
+    
+    // MARK: - Languages
+    @AppStorage("knownLanguage") var knownLanguage: AppLanguage = .English {
+        didSet { objectWillChange.send() }
     }
-
-    private func setupFiltering() {
-        Publishers.CombineLatest3(
-            $sentences,
-            $searchText
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .removeDuplicates()
-                .debounce(for: .milliseconds(250), scheduler: RunLoop.main),
-            $selectedTopic.removeDuplicates()
-        )
-        .receive(on: DispatchQueue.global(qos: .userInitiated))
-        .map { sentences, rawQuery, topic -> [Sentence] in
-            let q = rawQuery.folding(options: .diacriticInsensitive, locale: .current).lowercased()
-            return sentences.filter { s in
-                let topicOK = (topic?.isEmpty ?? true) || s.topicMatches(topic!)
-                let queryOK = q.isEmpty || s.matches(q)
-                return topicOK && queryOK
+    @AppStorage("learningLanguage") var learningLanguage: AppLanguage = .French {
+        didSet {
+            if knownLanguage == learningLanguage {
+                knownLanguage = learningLanguage == .English ? .French : .English
+            }
+            objectWillChange.send()
+        }
+    }
+    
+    init() {
+        setupFilteringPipeline()
+    }
+    
+    // MARK: - Streak Integration
+    func checkDailyGoalReached(newCount: Int, goal: Int, streaks: StreakService) {
+        // Check if goal was just reached
+        if newCount >= goal && !streaks.hasGoalToday() {
+            Task {
+                await streaks.recordDailyGoalReached(count: newCount, goal: goal)
             }
         }
-        .receive(on: RunLoop.main)
-        .assign(to: &$filtered)
     }
-
-    // MARK: - Actions
+    
+    // MARK: - Content Loading
+    func loadContent() async {
+        loadingState = .loading
+        loadingProgress = 0.1
+        
+        startProgressAnimation()
+        
+        do {
+            let urlString: String
+            
+            if let theme = selectedTheme {
+                // Load theme file
+                urlString = "https://d3bk01zimbieoh.cloudfront.net/text/themes/\(theme.rawValue).json"
+            } else if let grammar = selectedGrammar {
+                // Load grammar file
+                guard let grammarURL = GrammarCatalog.urlString(for: grammar) else {
+                    throw URLError(.badURL)
+                }
+                urlString = grammarURL
+            } else {
+                // Load general file (default)
+                urlString = "https://d3bk01zimbieoh.cloudfront.net/text/themes/general.json"
+            }
+            
+            let newSentences = try await DataService.fetchSentences(from: urlString)
+            
+            sentences = newSentences
+            
+            // Update global index for current sentences
+            globalIndex.removeAll()
+            for sentence in newSentences {
+                globalIndex[sentence.id] = sentence
+                // Also add to persistent cache
+                persistentSentenceCache[sentence.id] = sentence
+            }
+            
+            loadingState = .loaded
+            loadingProgress = 1.0
+            
+            // Apply current filters
+            await applyCurrentFilters()
+            
+        } catch {
+            loadingState = .error(error.localizedDescription)
+            loadingProgress = 0.0
+        }
+        
+        // Reset progress after delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.loadingProgress = 0.0
+        }
+    }
+    
+    // MARK: - Selection Methods
+    func selectTheme(_ theme: Theme) {
+        if selectedTheme == theme {
+            // Deselect current theme
+            selectedTheme = nil
+        } else {
+            // Select new theme and clear grammar
+            selectedTheme = theme
+            selectedGrammar = nil
+        }
+        
+        Task {
+            await loadContent()
+        }
+    }
+    
+    func selectGrammar(_ grammar: String) {
+        if selectedGrammar == grammar {
+            // Deselect current grammar
+            selectedGrammar = nil
+        } else {
+            // Select new grammar and clear theme
+            selectedGrammar = grammar
+            selectedTheme = nil
+        }
+        
+        Task {
+            await loadContent()
+        }
+    }
+    
+    // MARK: - Filtering Pipeline
+    private func setupFilteringPipeline() {
+        $searchText
+            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
+            .removeDuplicates()
+            .sink { _ in
+                Task { await self.applyCurrentFilters() }
+            }
+            .store(in: &cancellables)
+        
+        $selectedTopic
+            .removeDuplicates()
+            .sink { _ in
+                Task { await self.applyCurrentFilters() }
+            }
+            .store(in: &cancellables)
+        
+        // Re-filter when saved set changes
+        $saved
+            .sink { _ in
+                Task { await self.applyCurrentFilters() }
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func applyCurrentFilters() async {
+        filteringTask?.cancel()
+        filteringState = .loading
+        
+        filteringTask = Task {
+            let filtered = await filterSentences(
+                sentences: sentences,
+                searchText: searchText,
+                selectedTopic: selectedTopic
+            )
+            
+            guard !Task.isCancelled else { return }
+            
+            await MainActor.run {
+                _filtered = filtered
+                filteringState = .loaded
+            }
+        }
+        
+        await filteringTask?.value
+    }
+    
+    private func filterSentences(
+        sentences: [Sentence],
+        searchText: String,
+        selectedTopic: String?
+    ) async -> [Sentence] {
+        // Capture saved set on main actor before going to background
+        let savedIds = saved
+        
+        return await Task.detached(priority: .userInitiated) {
+            var filtered = sentences
+            
+            // FIRST: Filter out saved sentences from Home page
+            filtered = filtered.filter { !savedIds.contains($0.id) }
+            
+            // THEN: Apply other filters
+            if !searchText.isEmpty {
+                filtered = filtered.filter { $0.matches(searchText) }
+            }
+            
+            if let topic = selectedTopic {
+                filtered = filtered.filter { $0.topicMatches(topic) }
+            }
+            
+            return filtered
+        }.value
+    }
+    
+    // MARK: - Helpers
+    private func startProgressAnimation() {
+        loadingProgress = 0.1
+        
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+            guard let self = self else { timer.invalidate(); return }
+            Task { @MainActor in
+                guard self.loadingState.isLoading else {
+                    timer.invalidate()
+                    return
+                }
+                if self.loadingProgress < 0.9 {
+                    self.loadingProgress += 0.05
+                }
+            }
+        }
+    }
+    
+    func lookup(id: Int) -> Sentence? {
+        globalIndex[id]
+    }
+    
+    // MARK: - Save Management
     func toggleSave(_ sentence: Sentence) {
         if saved.contains(sentence.id) {
             saved.remove(sentence.id)
-            savedIndex.removeValue(forKey: sentence.id)
         } else {
             saved.insert(sentence.id)
-            savedIndex[sentence.id] = sentence  // keep a snapshot so UI can render anytime
         }
     }
     
-    func index(_ sentences: [Sentence]) {
-        for s in sentences {
-            globalIndex[s.id] = s
-        }
-    }
-
-    // Convenience resolver used by SavedView to get a Sentence by id
-    func lookup(id: Int) -> Sentence? {
-        // Prefer global; fall back to whatever is currently loaded
-        globalIndex[id] ?? sentences.first(where: { $0.id == id })
-    }
-
-    // MARK: - Theme-based networking
-    func loadTheme(_ theme: Theme) async {
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
-
-        guard let url = themeURL(for: theme) else {
-            errorMessage = "Invalid URL."
-            return
-        }
-
-        do {
-            let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                throw URLError(.badServerResponse)
-            }
-
-            var decoded = try JSONDecoder().decode([Sentence].self, from: data)
-           // decoded.shuffle() // randomize order each load
-
-            sentences = decoded
-            selectedTopic = nil
-            searchText = ""
-        } catch {
-            errorMessage = "Failed to load: \(error.localizedDescription)"
-            sentences = []
-        }
-    }
-
-    private func themeURL(for theme: Theme) -> URL? {
-        // Matches: https://d7hjupfdvrdpp.cloudfront.net/text/health.json
-        return URL(string: "https://d7hjupfdvrdpp.cloudfront.net/text/\(theme.filename)")
-    }
-
-    // Legacy loader
-    func loadSentences(from urlString: String) async {
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
-
-        guard let url = URL(string: urlString) else {
-            errorMessage = "Invalid URL."
-            return
-        }
-
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            let decoded = try JSONDecoder().decode([Sentence].self, from: data)
-            sentences = decoded
-        } catch {
-            errorMessage = "Failed to load: \(error.localizedDescription)"
-        }
+    // Helper to get saved sentences for SavedView
+    var savedSentences: [Sentence] {
+        return saved.compactMap { id in
+            globalIndex[id]
+        }.sorted { $0.id < $1.id }
     }
     
-    // MARK: Grammar selection
-    @Published var availableGrammar: [String] = GrammarCatalog.allDisplayNames
-    @Published var selectedGrammar: String? = nil
-
-    func selectGrammar(_ displayName: String?) {
-        // Clear grammar → restore whatever your default dataset is
-        guard let name = displayName, let url = GrammarCatalog.urlString(for: name) else {
-            selectedGrammar = nil
-            Task { @MainActor in
-                // Reload your default dataset (or just keep current list if you prefer)
-                // Example: await loadSentences(from: defaultURLString)
-            }
-            return
+    // MARK: - Reliable Sentence Lookup for SavedView
+    // This method should work regardless of current theme/grammar selection
+    func findSentence(by id: Int) -> Sentence? {
+        // First check current global index
+        if let sentence = globalIndex[id] {
+            return sentence
         }
-
-        selectedGrammar = name
-        // Optional: when picking grammar, clear the topic filter so results are obvious
-        selectedTopic = nil
-
-        Task { @MainActor in
-            await loadSentences(from: url)
-        }
+        
+        // If not found, check persistent cache
+        return persistentSentenceCache[id]
     }
     
-    
-
-    
-    // MARK: - Audio URL builder
-
-    private let audioBaseURL = "https://d7hjupfdvrdpp.cloudfront.net/audio/"
-
+    // MARK: - Audio
     func audioURL(for sentence: Sentence) -> URL? {
-        // If JSON already provides a full URL, prefer it.
-        if let s = sentence.audioURL, let u = URL(string: s) {
-            return u
-        }
-        // Build from learning language + id
-        let folder = learningLanguage.audioFolder
-        let prefix = learningLanguage.audioPrefix
-        let path = "\(audioBaseURL)\(folder)/\(prefix)-\(sentence.id).mp3"
-        return URL(string: path)
+        guard let urlString = sentence.audioURL, !urlString.isEmpty else { return nil }
+        return URL(string: urlString)
     }
-
-
-    // MARK: - AI: Explain & Context (cached + throttled + retries)
-    func explain(sentence: Sentence) async -> String {
-        aiIsWorking = true
+    
+    // MARK: - AI Features
+    func explain(sentence: Sentence) async -> String? {
+        guard let text = sentence.text(for: learningLanguage) else { return nil }
+        
         aiError = nil
-        defer { aiIsWorking = false }
-
-        let main = sentence.text(for: learningLanguage) ?? ""
-        let known = knownLanguage.displayName
-
-        let system = """
-        You are a concise language tutor. Explain sentences in the user's KNOWN language clearly and simply. Avoid overlong grammar lectures—focus on meaning, key grammar points, and any idioms. If the sentence is ambiguous, note the most common reading.
-        """
-        let user = """
-        Known language: \(known)
-        Target sentence: \(main)
-
-        Task: Explain this sentence in \(known). Include:
-        1) Natural translation
-        2) Brief breakdown of tricky words/grammar
-        3) One usage tip
-        """
-
-        let key = "explain:v1:\(known):\(main.hashValue)"
+        let key = "explain_\(sentence.id)_\(learningLanguage.rawValue)"
+        let system = "You are a helpful language teacher. Explain the grammar, vocabulary, and structure of sentences in a clear, educational way. Keep explanations concise but informative."
+        let user = "Explain this \(learningLanguage.displayName) sentence: \"\(text)\""
+        
         do {
-            return try await OpenAIService.shared.completeCached(key: key, system: system, user: user, maxTokens: 350, temperature: 0.2)
+            return try await ai.completeCached(key: key, system: system, user: user, maxTokens: 300)
         } catch {
-            aiError = (error as NSError).localizedDescription
-            return "Sorry—couldn’t generate an explanation."
+            aiError = "Failed to get explanation: \(error.localizedDescription)"
+            return nil
         }
     }
-
-    func contextualize(sentence: Sentence) async -> String {
-        aiIsWorking = true
+    
+    func contextualize(sentence: Sentence) async -> String? {
+        guard let text = sentence.text(for: learningLanguage) else { return nil }
+        
         aiError = nil
-        defer { aiIsWorking = false }
-
-        let main = sentence.text(for: learningLanguage) ?? ""
-        let known = knownLanguage.displayName
-
-        let system = """
-        You write short, vivid contexts (dialogues or mini-paragraphs) that make a target sentence feel natural. Keep it beginner-friendly and use simple vocabulary. Provide the output in the user's KNOWN language as narration with the TARGET sentence embedded in the original target language.
-        """
-        let user = """
-        Known language: \(known)
-        Target sentence (keep exactly as-is when used): \(main)
-
-        Task: Create a short context (3–5 lines) that naturally includes the target sentence once. First give a single-sentence setup in \(known), then present the context (either a brief dialogue with speaker tags or a mini-paragraph in \(known), but keep the target sentence itself in the target language when it appears).
-        """
-
-        let key = "context:v1:\(known):\(main.hashValue)"
+        let key = "context_\(sentence.id)_\(learningLanguage.rawValue)"
+        let system = "You are a helpful language teacher. Provide cultural context, usage situations, and practical examples for sentences. Focus on when and how native speakers would use these phrases."
+        let user = "Provide context and usage examples for this \(learningLanguage.displayName) sentence: \"\(text)\""
+        
         do {
-            return try await OpenAIService.shared.completeCached(key: key, system: system, user: user, maxTokens: 420, temperature: 0.4)
+            return try await ai.completeCached(key: key, system: system, user: user, maxTokens: 350)
         } catch {
-            aiError = (error as NSError).localizedDescription
-            return "Sorry—couldn’t generate context."
+            aiError = "Failed to get context: \(error.localizedDescription)"
+            return nil
         }
     }
 }

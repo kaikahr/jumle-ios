@@ -4,9 +4,7 @@
 //
 //  Created by Kai Kahar on 2025-08-07.
 //
-// File: Views/ProfileView.swift
-
-
+// File: Views/ProfileView.swift - Enhanced with streak tracking
 import SwiftUI
 import AuthenticationServices
 import GoogleSignInSwift
@@ -14,6 +12,7 @@ import GoogleSignInSwift
 struct ProfileView: View {
     @EnvironmentObject private var app: AppState
     @EnvironmentObject private var session: SessionViewModel
+    @EnvironmentObject private var streaks: StreakService
 
     var body: some View {
         NavigationStack {
@@ -59,6 +58,22 @@ struct ProfileView: View {
                 }
 
                 // -------------------
+                // Streak Section
+                // -------------------
+                if session.isSignedIn {
+                    Section("Learning Streak") {
+                        StreakStatsView(streaks: streaks)
+                    }
+                    
+                    Section {
+                        ActivityCalendar()
+                            .environmentObject(streaks)
+                    } header: {
+                        Text("Activity Calendar")
+                    }
+                }
+
+                // -------------------
                 // Languages Section
                 // -------------------
                 Section("Languages") {
@@ -99,72 +114,71 @@ struct ProfileView: View {
                 }
             }
             .navigationTitle("Profile")
-            .sheet(isPresented: $session.showSignInSheet) {
-                SignInSheet()
-                    .environmentObject(session)
-            }
         }
     }
 }
 
-// -------------------
-// Sign-In Sheet
-// -------------------
-struct SignInSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var session: SessionViewModel
+// MARK: - Streak Stats Component
 
+struct StreakStatsView: View {
+    @ObservedObject var streaks: StreakService
+    
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 20) {
-                Text("Sign in to jumle")
-                    .font(.title2)
-                    .bold()
-                    .padding(.top, 40)
-
-                // Google
-                GoogleSignInButton {
-                    if let rootVC = UIApplication.shared.connectedScenes
-                        .compactMap({ ($0 as? UIWindowScene)?.keyWindow?.rootViewController })
-                        .first {
-                        Task {
-                            do {
-                                try await session.signInWithGoogle(presenting: rootVC)
-                                dismiss()
-                            } catch {
-                                print("Google sign-in failed:", error.localizedDescription)
-                            }
-                        }
+        VStack(spacing: 16) {
+            // Current streak
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: "flame.fill")
+                            .foregroundStyle(.orange)
+                        Text("Current Streak")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
+                    Text("\(streaks.currentStreak)")
+                        .font(.title.weight(.bold))
+                        .foregroundStyle(.primary) +
+                    Text(" days")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
                 }
-                .frame(height: 48)
-                .padding(.horizontal)
-
-                // Apple
-                SignInWithAppleButton(.signIn, onRequest: { request in
-                    let req = session.startSignInWithApple()
-                    request.requestedScopes = req.requestedScopes
-                    request.nonce = req.nonce
-                }, onCompletion: { result in
-                    Task {
-                        do {
-                            try await session.handleAppleCompletion(result)
-                            dismiss()
-                        } catch {
-                            print("Apple sign-in failed:", error.localizedDescription)
-                        }
+                
+                Spacer()
+                
+                // Longest streak
+                VStack(alignment: .trailing, spacing: 4) {
+                    HStack {
+                        Text("Best")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Image(systemName: "trophy.fill")
+                            .foregroundStyle(.yellow)
                     }
-                })
-                .frame(height: 48)
-                .padding(.horizontal)
-
+                    Text("\(streaks.longestStreak)")
+                        .font(.title.weight(.bold))
+                        .foregroundStyle(.primary) +
+                    Text(" days")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            
+            Divider()
+            
+            // Total goals reached
+            HStack {
+                Image(systemName: "target")
+                    .foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Total Goals Reached")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text("\(streaks.totalGoalsReached)")
+                        .font(.title2.weight(.semibold))
+                }
                 Spacer()
             }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
-                }
-            }
         }
+        .padding(.vertical, 8)
     }
 }

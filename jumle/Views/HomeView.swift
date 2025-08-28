@@ -1,4 +1,4 @@
-// File: Views/HomeView.swift
+// File: Views/HomeView.swift - Ultra Simplified Version
 import SwiftUI
 
 struct HomeView: View {
@@ -10,140 +10,19 @@ struct HomeView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 10) {
-
-                // THEME selector
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(Theme.allCases) { theme in
-                            Button {
-                                Task {
-                                    app.selectedTheme = theme
-                                    await app.loadTheme(theme)
-                                    pageIndex = 0
-                                }
-                            } label: {
-                                Text(theme.display)
-                                    .font(.subheadline)
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 8)
-                                    .background(
-                                        Capsule().fill(
-                                            app.selectedTheme == theme
-                                            ? Color.accentColor.opacity(0.22)
-                                            : Color.accentColor.opacity(0.10)
-                                        )
-                                    )
-                                    .overlay(Capsule().stroke(Color.accentColor.opacity(0.35)))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 4)
-                }
-
-                // GRAMMAR selector (same pattern as themes)
-                GrammarChips(
+            LoadingStateWrapper(
+                loadingState: app.loadingState,
+                loadingMessage: "Loading content..."
+            ) {
+                VStack(spacing: 10) {
+                    // THEME selector
+                    themeSelector
                     
-                    points: app.availableGrammar,
-                    selected: app.selectedGrammar,
-                    onSelect: { point in
-                        let next = (app.selectedGrammar == point) ? nil : point
-                        app.selectGrammar(next)
-                        pageIndex = 0
-                    }
-                )
-                .padding(.horizontal, 12)
-
-                // ⬇️ Wrap the goal bar + pager with ZERO spacing and anchor the content to TOP
-                VStack(spacing: 0) {
-                    // DAILY GOAL
-                    DailyGoalBar(count: learned.todayCount, goal: learned.dailyGoal)
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, -16) // ← cancels any outer padding from the bar
-                        .onChange(of: learned.todayCount) { old, new in
-                            if old < learned.dailyGoal && new >= learned.dailyGoal {
-                                withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
-                                    showCongrats = true
-                                }
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                                    withAnimation(.easeOut) { showCongrats = false }
-                                }
-                            }
-                        }
-                        .overlay(alignment: .trailing) {
-                            if showCongrats {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "party.popper.fill")
-                                    Text("Great job!")
-                                        .font(.subheadline.weight(.semibold))
-                                }
-                                .padding(8)
-                                .background(.ultraThinMaterial, in: Capsule())
-                                .transition(.move(edge: .trailing).combined(with: .opacity))
-                                .padding(.trailing, 12)
-                            }
-                        }
-
-                    // CONTENT
-                    Group {
-                        if app.isLoading && app.sentences.isEmpty {
-                            ProgressView("Loading…")
-                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-
-                        } else if let err = app.errorMessage, app.sentences.isEmpty {
-                            VStack(spacing: 12) {
-                                Text("Failed to load").font(.headline)
-                                Text(err)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.center)
-                                HBoxButtons
-                            }
-                            .padding()
-
-                        } else if app.filtered.isEmpty {
-                            VStack(spacing: 14) {
-                                Text("No results").font(.headline)
-                                Text("Try clearing search, topic, or grammar.")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                HBoxFilters
-                                Button("Reload") {
-                                    Task { await app.loadTheme(app.selectedTheme) }
-                                }
-                                .buttonStyle(StablePillButtonStyle())
-                            }
-                            .padding()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-
-                        } else {
-                            VStack(spacing: 0) {
-                                TabView(selection: $pageIndex) {
-                                    ForEach(Array(app.filtered.enumerated()), id: \.1.id) { idx, s in
-                                        SentenceCardView(sentence: s)
-                                            .environmentObject(app)
-                                            .tag(idx)
-                                            .padding(.horizontal, 12)
-                                    }
-                                }.offset(y: -40)
-                                .tabViewStyle(.page(indexDisplayMode: .never))
-                              //  .padding(.top, -16)          // ← nukes the page TabView top inset
-                                .modifier(ZeroTabViewMargins())
-
-                                Text("\(pageIndex + 1) / \(max(app.filtered.count, 1))")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .padding(.top, 4)
-                                    .padding(.bottom, 8)
-                            }
-                            .animation(.default, value: app.filtered.count)
-                            .transition(.opacity)
-                        }
-                    }
-                    // Make sure the whole content hugs the top edge of the available height.
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    // GRAMMAR selector
+                    grammarSelector
+                    
+                    // Main content area
+                    contentArea
                 }
             }
             .navigationTitle("Home")
@@ -151,44 +30,264 @@ struct HomeView: View {
         .searchable(text: $app.searchText, placement: .navigationBarDrawer(displayMode: .always))
         .task {
             if app.sentences.isEmpty {
-                await app.loadTheme(app.selectedTheme)
+                await app.loadContent()
             }
         }
         .onChange(of: app.filtered) { _, new in
-            if pageIndex >= new.count { pageIndex = max(0, new.count - 1) }
+            if pageIndex >= new.count {
+                pageIndex = max(0, new.count - 1)
+            }
         }
         .onChange(of: app.searchText) { _, _ in pageIndex = 0 }
         .onChange(of: app.selectedTopic) { _, _ in pageIndex = 0 }
-        .onChange(of: app.selectedGrammar) { _, _ in pageIndex = 0 }
+        .onChange(of: app.selectedTheme) { _, _ in pageIndex = 0 }
     }
-
-    // Small button rows extracted just to keep things readable
-    private var HBoxButtons: some View {
-        HStack {
-            Button("Retry") {
-                Task { await app.loadTheme(app.selectedTheme) }
+    
+    // MARK: - Components
+    
+    private var themeSelector: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Themes")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(Theme.allCases) { theme in
+                        Button {
+                            selectTheme(theme)
+                        } label: {
+                            HStack(spacing: 6) {
+                                if app.selectedTheme == theme {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .imageScale(.small)
+                                }
+                                Text(theme.display)
+                                    .font(.subheadline.weight(.medium))
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule().fill(
+                                    app.selectedTheme == theme
+                                    ? Color.purple.opacity(0.25)
+                                    : Color.purple.opacity(0.12)
+                                )
+                            )
+                            .foregroundStyle(.purple)
+                            .overlay(Capsule().stroke(Color.purple.opacity(0.35)))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
             }
-            .buttonStyle(StablePillButtonStyle())
-
-            Button("Use Defaults") { app.errorMessage = nil }
-                .buttonStyle(StablePillButtonStyle())
         }
     }
-
-    private var HBoxFilters: some View {
-        HStack(spacing: 10) {
-            Button("Clear Search") { app.searchText = "" }
-                .buttonStyle(StablePillButtonStyle())
-            Button("Clear Topic") { app.selectedTopic = nil }
-                .buttonStyle(StablePillButtonStyle())
-            Button("Clear Grammar") { app.selectGrammar(nil) }
-                .buttonStyle(StablePillButtonStyle())
+    
+    private var grammarSelector: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Grammar Points")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(app.availableGrammar, id: \.self) { point in
+                        Button {
+                            selectGrammar(point)
+                        } label: {
+                            HStack(spacing: 6) {
+                                if app.selectedGrammar == point {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .imageScale(.small)
+                                }
+                                Text(point)
+                                    .font(.subheadline.weight(.medium))
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(
+                                Capsule().fill(
+                                    app.selectedGrammar == point
+                                    ? Color.blue.opacity(0.25)
+                                    : Color.blue.opacity(0.12)
+                                )
+                            )
+                            .foregroundStyle(.blue)
+                            .overlay(Capsule().stroke(Color.blue.opacity(0.35)))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+    }
+    
+    private var contentArea: some View {
+        VStack(spacing: 0) {
+            // Daily goal bar
+            DailyGoalBar(count: learned.todayCount, goal: learned.dailyGoal)
+                .padding(.horizontal, 12)
+                .padding(.bottom, -16)
+                .onChange(of: learned.todayCount) { old, new in
+                    handleGoalProgress(old: old, new: new)
+                }
+                .overlay(alignment: .trailing) {
+                    if showCongrats {
+                        congratsView
+                    }
+                }
+            
+            // Main content - no more progress bar here
+            Group {
+                if let error = app.errorMessage, app.sentences.isEmpty {
+                    errorView(error: error)
+                } else if app.filtered.isEmpty && !app.isLoading {
+                    emptyView
+                } else {
+                    sentenceView
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
+    
+    private var congratsView: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "party.popper.fill")
+            Text("Great job!")
+                .font(.subheadline.weight(.semibold))
+        }
+        .padding(8)
+        .background(.ultraThinMaterial, in: Capsule())
+        .foregroundStyle(.orange)
+        .transition(.move(edge: .trailing).combined(with: .opacity))
+        .padding(.trailing, 12)
+    }
+    
+    private func errorView(error: String) -> some View {
+        VStack(spacing: 16) {
+            ContentStateMessage(
+                title: "Failed to Load",
+                subtitle: error,
+                systemImage: "exclamationmark.triangle"
+            )
+            
+            Button("Retry") {
+                Task { await app.loadContent() }
+            }
+            .buttonStyle(StablePillButtonStyle())
+        }
+    }
+    
+    private var emptyView: some View {
+        VStack(spacing: 14) {
+            ContentStateMessage(
+                title: "No results",
+                subtitle: "Try clearing search, topic, or grammar filters.",
+                systemImage: "magnifyingglass"
+            )
+            
+            VStack(spacing: 8) {
+                HStack(spacing: 10) {
+                    Button("Clear Search") { app.searchText = "" }
+                        .buttonStyle(StablePillButtonStyle())
+                    Button("Clear Topic") { app.selectedTopic = nil }
+                        .buttonStyle(StablePillButtonStyle())
+                }
+                
+                HStack(spacing: 10) {
+                    Button("Clear Grammar") {
+                        app.selectedGrammar = nil
+                        Task { await app.loadContent() }
+                    }
+                        .buttonStyle(StablePillButtonStyle())
+                    Button("Reload") {
+                        Task { await app.loadContent() }
+                    }
+                    .buttonStyle(StablePillButtonStyle())
+                }
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+    
+    private var sentenceView: some View {
+        VStack(spacing: 0) {
+            TabView(selection: $pageIndex) {
+                ForEach(Array(app.filtered.enumerated()), id: \.1.id) { idx, sentence in
+                    SentenceCardView(sentence: sentence)
+                        .tag(idx)
+                        .padding(.horizontal, 12)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .offset(y: -40)
+            .modifier(ZeroTabViewMargins())
+            
+            // Page indicator
+            pageIndicator
+        }
+    }
+    
+    private var pageIndicator: some View {
+        HStack(spacing: 4) {
+            Text("\(pageIndex + 1)")
+                .font(.footnote.monospacedDigit())
+                .foregroundStyle(.primary)
+            Text("of")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Text("\(max(app.filtered.count, 1))")
+                .font(.footnote.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 4)
+        .padding(.bottom, 8)
+    }
+    
+    // MARK: - Actions
+    
+    private func selectTheme(_ theme: Theme) {
+        let impact = UIImpactFeedbackGenerator(style: .light)
+        impact.impactOccurred()
+        
+        app.selectTheme(theme)
+        pageIndex = 0
+    }
+    
+    private func selectGrammar(_ point: String) {
+        let impact = UIImpactFeedbackGenerator(style: .light)
+        impact.impactOccurred()
+        
+        app.selectGrammar(point)
+        pageIndex = 0
+    }
+    
+    private func handleGoalProgress(old: Int, new: Int) {
+        if old < learned.dailyGoal && new >= learned.dailyGoal {
+            let feedback = UINotificationFeedbackGenerator()
+            feedback.notificationOccurred(.success)
+            
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
+                showCongrats = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                withAnimation(.easeOut) {
+                    showCongrats = false
+                }
+            }
         }
     }
 }
 
-// iOS 17+: strip TabView’s extra vertical margins.
-// On older iOS this is a no-op.
+// iOS 17+ margin fix
 private struct ZeroTabViewMargins: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 17.0, *) {

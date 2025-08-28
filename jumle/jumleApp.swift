@@ -16,10 +16,10 @@ struct JumleApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
 
     @StateObject private var app = AppState()
-    @StateObject private var session = SessionViewModel() // from below
+    @StateObject private var session = SessionViewModel()
     @StateObject private var audio = AudioPlayerService()
     @StateObject private var learned = LearnedStore()
-    
+    @StateObject private var streaks = StreakService()
 
     var body: some Scene {
         WindowGroup {
@@ -27,20 +27,20 @@ struct JumleApp: App {
                 .environmentObject(app)
                 .environmentObject(session)
                 .environmentObject(audio)
-                .environmentObject(learned)   // ⬅️ provide LearnedStore to the tree
+                .environmentObject(learned)
+                .environmentObject(streaks)
                 .onAppear {
-                    // Start/stop Firestore listeners when auth changes
-                    if let uid = session.currentUser?.uid {
-                        learned.start(userId: uid)
-                    } else {
-                        learned.stop()
-                    }
+                    setupServices()
                 }
                 .onChange(of: session.currentUser?.uid) { _, newUID in
-                    if let uid = newUID {
-                        learned.start(userId: uid)
-                    } else {
-                        learned.stop()
+                    setupServices()
+                }
+                .onChange(of: learned.todayCount) { oldCount, newCount in
+                    // Check if daily goal was just reached
+                    if newCount >= learned.dailyGoal && oldCount < learned.dailyGoal {
+                        Task {
+                            await streaks.recordDailyGoalReached(count: newCount, goal: learned.dailyGoal)
+                        }
                     }
                 }
                 .sheet(isPresented: $session.showSignInSheet) {
@@ -50,5 +50,14 @@ struct JumleApp: App {
                 }
         }
     }
-
+    
+    private func setupServices() {
+        if let uid = session.currentUser?.uid {
+            learned.start(userId: uid)
+            streaks.start(userId: uid)
+        } else {
+            learned.stop()
+            streaks.stop()
+        }
+    }
 }
