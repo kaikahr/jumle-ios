@@ -1,4 +1,4 @@
-// File: Views/SavedView.swift - Fixed version with filtering
+// File: Views/SavedView.swift - Fixed version with proper filtering
 import SwiftUI
 
 struct SavedView: View {
@@ -68,6 +68,12 @@ struct SavedView: View {
         }
         .onAppear {
             updateAvailableFilters()
+            // ✅ Ensure all saved sentences are loaded when SavedView appears
+            Task {
+                await app.ensureSavedSentencesLoaded()
+                // Update filters again after potential new sentences are loaded
+                updateAvailableFilters()
+            }
         }
         .onChange(of: app.savedSentences) { _, _ in
             updateAvailableFilters()
@@ -100,7 +106,7 @@ struct SavedView: View {
                         )
                     }
                     
-                    // Grammar filters
+                    // Grammar filters (if any)
                     ForEach(Array(availableGrammar).sorted(), id: \.self) { grammar in
                         FilterChip(
                             title: grammar,
@@ -116,33 +122,39 @@ struct SavedView: View {
     
     // MARK: - Helper Methods
     
+    // ✅ FIX 2: Fixed theme detection logic
     private func updateAvailableFilters() {
         var themes = Set<String>()
         var grammar = Set<String>()
         
         for sentence in app.savedSentences {
-            // Add themes from sentence topics
+            // ✅ Add themes from sentence topics - use actual capitalized values, not lowercased
             for topic in sentence.topics {
                 if !topic.isEmpty {
-                    themes.insert(topic.lowercased())
+                    themes.insert(topic) // Keep original capitalization
                 }
             }
-            
-            // Check if sentence exists in grammar files (simplified approach)
-            // You might want to store grammar source info with sentences
         }
         
         availableThemes = themes
-        // You can populate grammar from GrammarCatalog if needed
+        availableGrammar = grammar // You can populate this if you track grammar sources
+        
+        // Debug print to verify themes are detected correctly
+        print("✅ Available themes: \(themes)")
+        print("✅ Sample sentence topics: \(app.savedSentences.prefix(3).map { $0.topics })")
     }
     
+    // ✅ FIX 2: Fixed filtering logic to match actual theme names
     private func filteredLearned(_ sentences: [Sentence]) -> [Sentence] {
         switch selectedFilter {
         case .all:
             return sentences
         case .theme(let theme):
             return sentences.filter { sentence in
-                sentence.topics.contains { $0.lowercased() == theme.lowercased() }
+                // ✅ Compare with actual topic values (case-insensitive but preserving structure)
+                sentence.topics.contains { topic in
+                    topic.lowercased() == theme.lowercased()
+                }
             }
         case .grammar(let grammar):
             // Filter by grammar if you have that info stored

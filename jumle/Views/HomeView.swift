@@ -1,4 +1,4 @@
-// File: Views/HomeView.swift - Ultra Simplified Version
+// File: Views/HomeView.swift - Clean Version Without Compilation Errors
 import SwiftUI
 
 struct HomeView: View {
@@ -14,12 +14,18 @@ struct HomeView: View {
                 loadingState: app.loadingState,
                 loadingMessage: "Loading content..."
             ) {
-                VStack(spacing: 10) {
+                VStack(spacing: 0) {
                     // THEME selector
                     themeSelector
+                        .padding(.bottom, 8)
                     
                     // GRAMMAR selector
                     grammarSelector
+                        .padding(.bottom, 12)
+                    
+                    // Daily goal bar - clean design
+                    dailyGoalSection
+                        .padding(.bottom, 8)
                     
                     // Main content area
                     contentArea
@@ -41,6 +47,20 @@ struct HomeView: View {
         .onChange(of: app.searchText) { _, _ in pageIndex = 0 }
         .onChange(of: app.selectedTopic) { _, _ in pageIndex = 0 }
         .onChange(of: app.selectedTheme) { _, _ in pageIndex = 0 }
+        // Enhanced celebration overlay
+        .overlay(
+            Group {
+                if showCongrats {
+                    DailyGoalCelebrationView {
+                        withAnimation(.easeOut) {
+                            showCongrats = false
+                        }
+                    }
+                    .zIndex(999)
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
+            }
+        )
     }
     
     // MARK: - Components
@@ -128,47 +148,32 @@ struct HomeView: View {
         }
     }
     
-    private var contentArea: some View {
-        VStack(spacing: 0) {
-            // Daily goal bar
-            DailyGoalBar(count: learned.todayCount, goal: learned.dailyGoal)
-                .padding(.horizontal, 12)
-                .padding(.bottom, -16)
-                .onChange(of: learned.todayCount) { old, new in
-                    handleGoalProgress(old: old, new: new)
-                }
-                .overlay(alignment: .trailing) {
-                    if showCongrats {
-                        congratsView
-                    }
-                }
-            
-            // Main content - no more progress bar here
-            Group {
-                if let error = app.errorMessage, app.sentences.isEmpty {
-                    errorView(error: error)
-                } else if app.filtered.isEmpty && !app.isLoading {
-                    emptyView
-                } else {
-                    sentenceView
-                }
+    // MARK: - Daily Goal Section (Clean Design)
+    
+    private var dailyGoalSection: some View {
+        DailyGoalBar(count: learned.todayCount, goal: learned.dailyGoal)
+            .padding(.horizontal, 16)
+            .onChange(of: learned.todayCount) { old, new in
+                handleGoalProgress(old: old, new: new)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        }
     }
     
-    private var congratsView: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "party.popper.fill")
-            Text("Great job!")
-                .font(.subheadline.weight(.semibold))
+    // MARK: - Content Area
+    
+    private var contentArea: some View {
+        Group {
+            if let error = app.errorMessage, app.sentences.isEmpty {
+                errorView(error: error)
+            } else if app.filtered.isEmpty && !app.isLoading {
+                emptyView
+            } else {
+                sentenceView
+            }
         }
-        .padding(8)
-        .background(.ultraThinMaterial, in: Capsule())
-        .foregroundStyle(.orange)
-        .transition(.move(edge: .trailing).combined(with: .opacity))
-        .padding(.trailing, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
+    
+    // MARK: - Content Views
     
     private func errorView(error: String) -> some View {
         VStack(spacing: 16) {
@@ -183,6 +188,8 @@ struct HomeView: View {
             }
             .buttonStyle(StablePillButtonStyle())
         }
+        .padding(.top, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     private var emptyView: some View {
@@ -214,32 +221,55 @@ struct HomeView: View {
                 }
             }
         }
-        .padding()
+        .padding(.top, 20)
+        .padding(.horizontal)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
     
+    // MARK: - Sentence View (Improved Scrolling)
+    
     private var sentenceView: some View {
-        VStack(spacing: 0) {
-            TabView(selection: $pageIndex) {
-                ForEach(Array(app.filtered.enumerated()), id: \.1.id) { idx, sentence in
-                    SentenceCardView(sentence: sentence)
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                // Main sentence content
+                TabView(selection: $pageIndex) {
+                    ForEach(Array(app.filtered.enumerated()), id: \.1.id) { idx, sentence in
+                        // Each card gets full scrollable area
+                        ScrollView(.vertical, showsIndicators: false) {
+                            VStack {
+                                // Generous top spacing
+                                Spacer()
+                                    .frame(height: 40)
+                                
+                                SentenceCardView(sentence: sentence)
+                                    .padding(.horizontal, 12)
+                                
+                                // Generous bottom spacing for page indicator
+                                Spacer()
+                                    .frame(height: 100)
+                            }
+                            .frame(minHeight: geometry.size.height) // Ensure full height is available
+                        }
                         .tag(idx)
-                        .padding(.horizontal, 12)
+                    }
                 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .modifier(ZeroTabViewMargins())
+                
+                // Page indicator - overlay at bottom
+                pageIndicator
+                    .background(.regularMaterial.opacity(0.8))
+                    .cornerRadius(12)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .offset(y: -40)
-            .modifier(ZeroTabViewMargins())
-            
-            // Page indicator
-            pageIndicator
         }
     }
     
     private var pageIndicator: some View {
         HStack(spacing: 4) {
             Text("\(pageIndex + 1)")
-                .font(.footnote.monospacedDigit())
+                .font(.footnote.monospacedDigit().weight(.medium))
                 .foregroundStyle(.primary)
             Text("of")
                 .font(.footnote)
@@ -248,8 +278,8 @@ struct HomeView: View {
                 .font(.footnote.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
-        .padding(.top, 4)
-        .padding(.bottom, 8)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
     }
     
     // MARK: - Actions
@@ -270,18 +300,18 @@ struct HomeView: View {
         pageIndex = 0
     }
     
+    // MARK: - Enhanced Goal Progress Handler
+    
     private func handleGoalProgress(old: Int, new: Int) {
+        // Check if daily goal was just reached
         if old < learned.dailyGoal && new >= learned.dailyGoal {
+            // Success haptic feedback
             let feedback = UINotificationFeedbackGenerator()
             feedback.notificationOccurred(.success)
             
+            // Show enhanced celebration
             withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
                 showCongrats = true
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                withAnimation(.easeOut) {
-                    showCongrats = false
-                }
             }
         }
     }

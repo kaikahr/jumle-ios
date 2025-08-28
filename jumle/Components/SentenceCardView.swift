@@ -1,8 +1,7 @@
-//
 //  SentenceCardView.swift
 //  jumle
 //
-// File: Components/SentenceCardView.swift
+// File: Components/SentenceCardView.swift - Updated with better audio handling
 import SwiftUI
 import AVFoundation
 
@@ -26,13 +25,23 @@ struct SentenceCardView: View {
     @State private var isLoadingExplain = false
     @State private var isLoadingContext = false
 
-    private var hasAudio: Bool { app.audioURL(for: sentence) != nil }
+    // Simply check if we have text in the target language (audio should exist for all sentences)
+    private var hasAudio: Bool {
+        return sentence.text(for: mainLang) != nil
+    }
+    
     private var mainLang: AppLanguage { displayLanguage ?? app.learningLanguage }
 
     private func playAudio(rate: Float) {
-        guard let url = app.audioURL(for: sentence) else { return }
-        audio.load(urlString: url.absoluteString)
-        audio.play(rate: rate)
+        // Only generate URL when actually playing
+        guard let audioURL = app.audioURL(for: sentence, language: mainLang) else {
+            print("❌ Could not generate audio URL for sentence \(sentence.id) in \(mainLang.displayName)")
+            return
+        }
+        
+        let urlString = audioURL.absoluteString
+        print("🎵 Playing audio at \(rate)x speed: \(urlString)")
+        audio.loadAndPlay(urlString: urlString, rate: rate)
     }
 
     var body: some View {
@@ -84,22 +93,41 @@ struct SentenceCardView: View {
 
             // Audio + translate row
             HStack(spacing: 10) {
-                Button { playAudio(rate: 0.5) } label: {
-                    Label("0.5×", systemImage: "speaker.wave.2.fill")
-                        .font(.subheadline)
-                        .accessibilityLabel("Play at half speed")
+                // 0.5x speed button - static speaker icon
+                Button {
+                    playAudio(rate: 0.5)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "speaker.wave.2.fill")
+                        Text("0.5×")
+                    }
+                    .font(.subheadline)
+                    .accessibilityLabel("Play at half speed")
                 }
                 .disabled(!hasAudio)
-                .buttonStyle(StablePillButtonStyle(height: 42))
+                .buttonStyle(StablePillButtonStyle(
+                    fill: hasAudio ? Color(.secondarySystemBackground) : Color(.tertiarySystemBackground),
+                    height: 42
+                ))
 
-                Button { playAudio(rate: 1.0) } label: {
-                    Label("1×", systemImage: "play.fill")
-                        .font(.subheadline)
-                        .accessibilityLabel("Play at normal speed")
+                // 1x speed button - static play icon
+                Button {
+                    playAudio(rate: 1.0)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "play.fill")
+                        Text("1×")
+                    }
+                    .font(.subheadline)
+                    .accessibilityLabel("Play at normal speed")
                 }
                 .disabled(!hasAudio)
-                .buttonStyle(StablePillButtonStyle(height: 42))
+                .buttonStyle(StablePillButtonStyle(
+                    fill: hasAudio ? Color(.secondarySystemBackground) : Color(.tertiarySystemBackground),
+                    height: 42
+                ))
 
+                // Translate button
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) { showTranslation.toggle() }
                 } label: {
@@ -110,6 +138,15 @@ struct SentenceCardView: View {
                 .buttonStyle(StablePillButtonStyle(fill: tint.opacity(0.14), height: 42))
             }
             .padding(.horizontal, 8)
+            
+            // Show audio error if any
+            if case .failed(let error) = audio.loadingState {
+                Text("Audio error: \(error)")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
 
             // Explain / Context row
             HStack(spacing: 10) {
@@ -229,6 +266,10 @@ struct SentenceCardView: View {
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { showContextSheet = false } } }
             }
             .presentationDetents([.medium, .large])
+        }
+        .onDisappear {
+            // Stop audio when card disappears
+            audio.stop()
         }
     }
 }

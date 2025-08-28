@@ -1,4 +1,4 @@
-// File: Models/Sentence.swift
+// File: Models/Sentence.swift - Fixed with full Codable conformance
 import Foundation
 
 private extension String {
@@ -9,7 +9,8 @@ private extension String {
     }
 }
 
-struct Sentence: Identifiable, Hashable, Decodable {
+// ✅ Changed from Decodable to Codable (which includes both Encodable and Decodable)
+struct Sentence: Identifiable, Hashable, Codable {
     let id: Int
 
     // Language strings straight from JSON
@@ -48,6 +49,26 @@ struct Sentence: Identifiable, Hashable, Decodable {
         level = try? c.decode(String.self, forKey: .level)
         theme = try? c.decode(String.self, forKey: .theme)
         audioURL = try? c.decode(String.self, forKey: .audioURL)
+    }
+
+    // ✅ Added custom encoding implementation to match the decoding structure
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        
+        try container.encode(id, forKey: .id)
+        
+        try container.encodeIfPresent(english, forKey: .English)
+        try container.encodeIfPresent(french, forKey: .French)
+        try container.encodeIfPresent(german, forKey: .German)
+        try container.encodeIfPresent(turkish, forKey: .Turkish)
+        try container.encodeIfPresent(ukrainian, forKey: .Ukrainian)
+        try container.encodeIfPresent(japanese, forKey: .Japanese)
+        try container.encodeIfPresent(italian, forKey: .Italian)
+        try container.encodeIfPresent(russian, forKey: .Russian)
+        
+        try container.encodeIfPresent(level, forKey: .level)
+        try container.encodeIfPresent(theme, forKey: .theme)
+        try container.encodeIfPresent(audioURL, forKey: .audioURL)
     }
 
     // MARK: Strict accessor — NO fallback

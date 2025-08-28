@@ -1,4 +1,3 @@
-// Replace your current AppState.swift with this simplified version
 
 import SwiftUI
 import Combine
@@ -33,7 +32,8 @@ final class AppState: ObservableObject {
     @Published var sentences: [Sentence] = []
     @Published var globalIndex: [Int: Sentence] = [:]
     
-    // Persistent cache of ALL sentences ever loaded (for SavedView)
+    // ✅ Persistent cache of ALL sentences ever loaded (for SavedView) - now truly persistent
+    @AppStorage("sentenceCache") private var sentenceCacheData: Data = Data()
     private var persistentSentenceCache: [Int: Sentence] = [:]
     
     // MARK: - Selection State
@@ -56,7 +56,17 @@ final class AppState: ObservableObject {
     // MARK: - Search & Filtering
     @Published var searchText: String = ""
     @Published private var _filtered: [Sentence] = []
-    @Published var saved: Set<Int> = []
+    
+    // ✅ FIX 1: Make saved persistent using AppStorage
+    @AppStorage("savedSentences") private var savedData: Data = Data()
+    @Published var saved: Set<Int> = [] {
+        didSet {
+            // Persist to UserDefaults whenever saved changes
+            if let encoded = try? JSONEncoder().encode(Array(saved)) {
+                savedData = encoded
+            }
+        }
+    }
     
     // MARK: - Loading States
     @Published var loadingState: LoadingState = .idle
@@ -107,7 +117,32 @@ final class AppState: ObservableObject {
     }
     
     init() {
+        // ✅ Load saved sentences from storage on init
+        loadSavedFromStorage()
+        // ✅ Load persistent sentence cache from storage
+        loadPersistentCacheFromStorage()
         setupFilteringPipeline()
+    }
+    
+    // ✅ Load saved sentences from persistent storage
+    private func loadSavedFromStorage() {
+        if let decoded = try? JSONDecoder().decode([Int].self, from: savedData) {
+            saved = Set(decoded)
+        }
+    }
+    
+    // ✅ Load persistent sentence cache from storage
+    private func loadPersistentCacheFromStorage() {
+        if let decoded = try? JSONDecoder().decode([Int: Sentence].self, from: sentenceCacheData) {
+            persistentSentenceCache = decoded
+        }
+    }
+    
+    // ✅ Persist sentence cache to storage
+    private func savePersistentCacheToStorage() {
+        if let encoded = try? JSONEncoder().encode(persistentSentenceCache) {
+            sentenceCacheData = encoded
+        }
     }
     
     // MARK: - Streak Integration
@@ -152,9 +187,12 @@ final class AppState: ObservableObject {
             globalIndex.removeAll()
             for sentence in newSentences {
                 globalIndex[sentence.id] = sentence
-                // Also add to persistent cache
+                // ✅ Also add to persistent cache AND save to storage
                 persistentSentenceCache[sentence.id] = sentence
             }
+            
+            // ✅ Save persistent cache to storage after updating
+            savePersistentCacheToStorage()
             
             loadingState = .loaded
             loadingProgress = 1.0
@@ -170,6 +208,50 @@ final class AppState: ObservableObject {
         // Reset progress after delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.loadingProgress = 0.0
+        }
+    }
+    
+    // ✅ Method to preload saved sentences that might be missing from cache
+    func ensureSavedSentencesLoaded() async {
+        let missingSentenceIds = saved.filter { id in
+            persistentSentenceCache[id] == nil && globalIndex[id] == nil
+        }
+        
+        guard !missingSentenceIds.isEmpty else { return }
+        
+        // Try to load missing sentences from different themes
+        let themes = Theme.allCases
+        
+        for theme in themes {
+            let urlString = "https://d3bk01zimbieoh.cloudfront.net/text/themes/\(theme.rawValue).json"
+            
+            do {
+                let sentences = try await DataService.fetchSentences(from: urlString)
+                var foundAny = false
+                
+                for sentence in sentences {
+                    if missingSentenceIds.contains(sentence.id) {
+                        persistentSentenceCache[sentence.id] = sentence
+                        foundAny = true
+                    }
+                }
+                
+                if foundAny {
+                    savePersistentCacheToStorage()
+                }
+                
+                // If we found all missing sentences, no need to continue
+                let stillMissing = missingSentenceIds.filter { id in
+                    persistentSentenceCache[id] == nil
+                }
+                if stillMissing.isEmpty {
+                    break
+                }
+                
+            } catch {
+                // Continue to next theme if this one fails
+                continue
+            }
         }
     }
     
@@ -306,13 +388,16 @@ final class AppState: ObservableObject {
             saved.remove(sentence.id)
         } else {
             saved.insert(sentence.id)
+            // ✅ Ensure sentence is in persistent cache when saved
+            persistentSentenceCache[sentence.id] = sentence
+            savePersistentCacheToStorage()
         }
     }
     
     // Helper to get saved sentences for SavedView
     var savedSentences: [Sentence] {
         return saved.compactMap { id in
-            globalIndex[id]
+            globalIndex[id] ?? persistentSentenceCache[id]
         }.sorted { $0.id < $1.id }
     }
     
@@ -329,9 +414,21 @@ final class AppState: ObservableObject {
     }
     
     // MARK: - Audio
-    func audioURL(for sentence: Sentence) -> URL? {
-        guard let urlString = sentence.audioURL, !urlString.isEmpty else { return nil }
-        return URL(string: urlString)
+    func audioURL(for sentence: Sentence, language: AppLanguage? = nil) -> URL? {
+        let targetLanguage = language ?? learningLanguage
+        
+        // Ensure the sentence has text in the target language
+        guard sentence.text(for: targetLanguage) != nil else {
+            return nil
+        }
+        
+        let baseURL = "https://d3bk01zimbieoh.cloudfront.net/audio"
+        let audioFolder = targetLanguage.audioFolder
+        let audioPrefix = targetLanguage.audioPrefix
+        let audioFileName = "\(audioPrefix)-\(sentence.id).mp3"
+        let fullURL = "\(baseURL)/\(audioFolder)/\(audioFileName)"
+        
+        return URL(string: fullURL)
     }
     
     // MARK: - AI Features

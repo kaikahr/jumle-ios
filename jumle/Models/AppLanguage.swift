@@ -4,7 +4,7 @@
 //
 //  Created by Kai Kahar on 2025-08-07.
 //
-// File: Models/AppLanguage.swift
+// File: Models/AppLanguage.swift - Verified with correct audio mappings
 import Foundation
 
 enum AppLanguage: String, CaseIterable, Codable, Identifiable {
@@ -24,9 +24,10 @@ enum AppLanguage: String, CaseIterable, Codable, Identifiable {
         case .Russian:   return "Russian"
         }
     }
-    
 }
+
 extension AppLanguage {
+    /// Audio folder name based on your screenshot
     var audioFolder: String {
         switch self {
         case .English:   return "audio_en"
@@ -34,7 +35,7 @@ extension AppLanguage {
         case .German:    return "audio_de"
         case .Turkish:   return "audio_tr"
         case .Ukrainian: return "audio_uk"
-        case .Japanese:  return "audio_jp"   // as per your note
+        case .Japanese:  return "audio_jp"
         case .Italian:   return "audio_it"
         case .Russian:   return "audio_ru"
         }

@@ -5,7 +5,7 @@
 //  Created by Kai Kahar on 2025-08-07.
 //
 
-// File: Views/ContentView.swift
+// File: Views/ContentView.swift - Updated to preload saved sentences
 import SwiftUI
 
 struct ContentView: View {
@@ -26,6 +26,12 @@ struct ContentView: View {
         .sheet(isPresented: $session.showSignInSheet) {
             SignInView().environmentObject(session)
         }
+        .task {
+            // ✅ Preload saved sentences on app start
+            if !app.saved.isEmpty {
+                await app.ensureSavedSentencesLoaded()
+            }
+        }
     }
 }
 
@@ -34,6 +40,5 @@ struct ContentView: View {
         .environmentObject(AppState())
         .environmentObject(AudioPlayerService())
         .environmentObject(SessionViewModel())
-        .environmentObject(LearnedStore()) // 👈 so previews don’t crash
+        .environmentObject(LearnedStore()) // 👈 so previews don't crash
 }
-
